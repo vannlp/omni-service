@@ -1,0 +1,48 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-backendmutosi
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            backend:
+              service:
+                name: backendmutosi-service
+                port:
+                  number: 80
+
+
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+  name: ingress-backendmutosi
+  namespace: default
+spec:
+  rules:
+  - host: uat-api-mutosi.newweb.vn
+    http:
+      paths:
+      - backend:
+          service:
+            name: backendnutifoodshop-service
+            port:
+              number: 80
+        path: /*
+        pathType: ImplementationSpecific
+
+
+
+
+
+
+

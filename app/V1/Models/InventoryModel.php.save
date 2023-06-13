@@ -1,0 +1,362 @@
+<?php
+
+
+namespace App\V1\Models;
+
+
+use App\Batch;
+use App\Inventory;
+use App\InventoryDetail;
+use App\Product;
+use App\Supports\Message;
+use App\TM;
+use App\Unit;
+use App\Warehouse;
+use App\WarehouseDetail;
+use Illuminate\Support\Facades\DB;
+
+class InventoryModel extends AbstractModel
+{
+    /**
+     * InventoryModel constructor.
+     * @param Inventory|null $model
+     */
+    public function __construct(Inventory $model = null)
+    {
+        parent::__construct($model);
+    }
+
+    public function upsert($input)
+    {
+        $code = $this->getAutoCode($input['type']);
+        $id   = !empty($input['id']) ? $input['id'] : 0;
+        if ($id) {
+            $inventory = Inventory::find($id);
+            if (empty($inventory)) {
+                throw new \Exception(Message::get("V003", "ID: #$id"));
+            }
+            $inventory->code        = array_get($input, 'code', $inventory->code);
+            $inventory->transport   = array_get($input, 'transport', $inventory->transport);
+            $inventory->user_id     = array_get($input, 'user_id', $inventory->user_id);
+            $inventory->company_id  = TM::getCurrentCompanyId();
+            $inventory->date        = !empty($input['date']) ? date("Y-m-d", strtotime($input['date'])) : $inventory->date;
+            $inventory->status      = array_get($input, 'status', $inventory->status);
+            $inventory->description = array_get($input, 'description', $inventory->description);
+            $inventory->type        = array_get($input, 'type', $inventory->type);
+            $inventory->providers   = array_get($input, 'providers', $inventory->providers);
+            $inventory->save();
+        } else {
+            $param     = [
+                'code'        => $code,
+                'date'        => date("Y-m-d", strtotime($input['date'])),
+                'transport'   => $input['transport'] ?? null,
+                'description' => $input['description'] ?? null,
+                'user_id'     => array_get($input, 'user_id'),
+                'company_id'  => TM::getCurrentCompanyId(),
+                'status'      => array_get($input, 'status'),
+                'type'        => array_get($input, 'type'),
+                'providers'   => array_get($input, 'providers'),
+            ];
+            $inventory = $this->create($param);
+        }
+        // Create|Update Inventory Detail
+        $inventoryDetailId = $inventory->id;
+        if (!empty($input['details'])) {
+            $allInventoryDetail       = InventoryDetail::model()->where('inventory_id', $inventoryDetailId)->get()->toArray();
+            $allInventoryDetail       = array_pluck($allInventoryDetail, 'id', 'id');
+            $allInventoryDetailDelete = $allInventoryDetail;
+            foreach ($input['details'] as $key => $item) {
+                $id = $item['id'] ?? null;
+                if (!empty($allInventoryDetailDelete[$id])) {
+                    unset($allInventoryDetailDelete[$id]);
+                }
+                $inventoryDetail      = InventoryDetail::find($id);
+                $inventoriesUnit      = Unit::find($item['unit_id']);
+                $inventoriesProduct   = Product::find($item['product_id']);
+                $inventoriesWarehouse = Warehouse::find($item['warehouse_id']);
+                $inventoriesBatch     = Batch::find($item['batch_id']);
+                if (empty($inventoryDetail)) {
+                    $param                = [
+                        "inventory_id"   => $inventoryDetailId,
+                        "product_id"     => $item['product_id'],
+                        "product_code"   => $inventoriesProduct->code,
+                        "product_name"   => $inventoriesProduct->name,
+                        "warehouse_id"   => $item['warehouse_id'],
+                        "warehouse_code" => $inventoriesWarehouse->code,
+                        "warehouse_name" => $inventoriesWarehouse->name,
+                        "unit_id"        => $item['unit_id'],
+                        "unit_code"      => $inventoriesUnit->code,
+                        "unit_name"      => $inventoriesUnit->name,
+                        "batch_id"       => $item['batch_id'],
+                        "batch_code"     => $inventoriesBatch->code,
+                        "batch_name"     => $inventoriesBatch->name,
+                        "quantity"       => array_get($item, 'quantity', null),
+                        "exp"            => !empty($item['exp']) ? date('Y-m-d H:i:s', strtotime($item['exp'])) : null,
+                        "price"          => !empty($item['price']) ? $item['price'] : 0,
+                    ];
+                    $inventoryDetailModel = new InventoryDetail();
+                    $inventoryDetailModel->create($param);
+                } else {
+                    $inventoryDetail->inventory_id   = $inventoryDetailId;
+                    $inventoryDetail->product_id     = $item['product_id'];
+                    $inventoryDetail->product_code   = $inventoriesProduct->code;
+                    $inventoryDetail->product_name   = $inventoriesProduct->name;
+                    $inventoryDetail->warehouse_id   = $item['warehouse_id'];
+                    $inventoryDetail->warehouse_code = $inventoriesWarehouse->code;
+                    $inventoryDetail->warehouse_name = $inventoriesWarehouse->name;
+                    $inventoryDetail->unit_id        = $item['unit_id'];
+                    $inventoryDetail->unit_code      = $inventoriesUnit->code;
+                    $inventoryDetail->unit_name      = $inventoriesUnit->name;
+                    $inventoryDetail->batch_id       = $item['batch_id'];
+                    $inventoryDetail->batch_code     = $inventoriesBatch->code;
+                    $inventoryDetail->batch_name     = $inventoriesBatch->name;
+                    $inventoryDetail->quantity       = array_get($item, 'quantity', null);
+                    $inventoryDetail->exp            = !empty($item['exp']) ? date('Y-m-d H:i:s', strtotime($item['exp'])) : null;
+                    $inventoryDetail->price          = !empty($item['price']) ? $item['price'] : 0;
+                    $inventoryDetail->save();
+                }
+            }
+            if (!empty($allInventoryDetailDelete)) {
+                InventoryDetail::model()->whereIn('id', array_values($allInventoryDetailDelete))->delete();
+            }
+
+            // Create|Update warehouse_detail
+            if (!empty($input['details']) && $input['status'] == INVENTORY_STATUS_COMPLETED) {
+                if (isset($input['type']) && $input['type'] == INVENTORY_TYPE_N) {
+                    foreach ($input['details'] as $detail) {
+                        $inventoriesUnit       = Unit::find($detail['unit_id']);
+                        $inventoriesProduct    = Product::find($detail['product_id']);
+                        $inventoriesWarehouse  = Warehouse::find($detail['warehouse_id']);
+                        $inventoriesBatch      = Batch::find($detail['batch_id']);
+                        $param                 = [
+                            "product_id"     => $detail['product_id'],
+                            "product_code"   => $inventoriesProduct->code,
+                            "product_name"   => $inventoriesProduct->name,
+                            "warehouse_id"   => $detail['warehouse_id'],
+                            "warehouse_code" => $inventoriesWarehouse->code,
+                            "warehouse_name" => $inventoriesWarehouse->name,
+                            "unit_id"        => $detail['unit_id'],
+                            "unit_code"      => $inventoriesUnit->code,
+                            "unit_name"      => $inventoriesUnit->name,
+                            "batch_id"       => $detail['batch_id'],
+                            "batch_code"     => $inventoriesBatch->code,
+                            "batch_name"     => $inventoriesBatch->name,
+                            "company_id"     => TM::getCurrentCompanyId(),
+                            "exp"            => !empty($detail['exp']) ? date('Y-m-d H:i:s', strtotime($detail['exp'])) : null,
+                            "price"          => !empty($detail['price']) ? $detail['price'] : 0,
+                            "quantity"       => $detail['quantity'],
+                        ];
+                        $warehouseDetailsModel = new WarehouseDetail();
+                        $warehouseDetails      = WarehouseDetail::model()->where([
+                            'product_id'   => $detail['product_id'],
+                            'warehouse_id' => $detail['warehouse_id'],
+                            'batch_id'     => $detail['batch_id'],
+                            'company_id'   => TM::getCurrentCompanyId(),
+                            'unit_id'      => $detail['unit_id'],
+                            'price'        => !empty($detail['price']) ? $detail['price'] : 0,
+                            'exp'          => !empty($detail['exp']) ? date('Y-m-d H:i:s', strtotime($detail['exp'])) : null,
+                        ])->first();
+                        if (empty($warehouseDetails)) {
+                            $warehouseDetailsModel->create($param);
+                        }
+                        if (!empty($warehouseDetails)) {
+                            $warehouseDetails->quantity += $detail['quantity'];
+                            $warehouseDetails->save();
+                        }
+                    }
+                }
+
+                if (isset($input['type']) && $input['type'] == INVENTORY_TYPE_X) {
+                    foreach ($input['details'] as $detail) {
+                        $warehouseDetails = WarehouseDetail::model()->where([
+                            'product_id'   => $detail['product_id'],
+                            'warehouse_id' => $detail['warehouse_id'],
+                            'batch_id'     => $detail['batch_id'],
+                            'company_id'   => TM::getCurrentCompanyId(),
+                            'unit_id'      => $detail['unit_id'],
+                            'price'        => !empty($detail['price']) ? $detail['price'] : 0,
+                            'exp'          => !empty($detail['exp']) ? date('Y-m-d H:i:s', strtotime($detail['exp'])) : null,
+                        ])->first();
+                        if (empty($warehouseDetails)) {
+                            throw new \Exception(Message::get("V052", "ID: #{$inventory->id} - ProductID:{$detail['product_id']} - WarehouseID:{}}"));
+                        }
+                        if ($warehouseDetails->quantity < $detail['quantity']) {
+                            throw new \Exception(Message::get("V053", "ID: #{$inventory->id}"));
+                        } else {
+                            $warehouseDetails->quantity   -= $detail['quantity'];
+                            $warehouseDetails->updated_at = date('Y-m-d H:i:s', time());
+                            $warehouseDetails->updated_by = TM::getCurrentUserId();
+                            if ($warehouseDetails->quantity == 0) {
+                                DB::beginTransaction();
+                                $queryDelete = "DELETE FROM `warehouse_details` WHERE `id` = {$warehouseDetails->id}";
+                                DB::statement($queryDelete);
+                                DB::commit();
+                            }
+                            $warehouseDetails->save();
+                        }
+                    }
+                }
+            }
+
+            return $inventory;
+        }
+
+
+    }
+
+
+    public function search($input = [], $with = [], $limit = null)
+    {
+        $query = $this->make($with);
+        $this->sortBuilder($query, $input);
+        $query->where('company_id', TM::getCurrentCompanyId());
+        if (!empty($input['code'])) {
+            $query->where('code', 'like', "%{$input['code']}%");
+        }
+
+        if (isset($input['type'])) {
+            $query->where('type', $input['type']);
+        }
+
+        if (isset($input['status'])) {
+            $query->where('status', $input['status']);
+        }
+
+        if (!empty($input['created_at'])) {
+            $date = $input['created_at'];
+            $query->whereDate('created_at', date('Y-m-d', strtotime($date)));
+        }
+
+        if (!empty($input['batch_name'])) {
+            $query = $query->whereHas('details', function ($q1) use ($input) {
+                $q1->whereHas('batchInventory', function ($q2) use ($input) {
+                    $q2->where('name', 'like', "%{$input['batch_name']}%");
+                });
+            });
+        }
+
+        if (!empty($input['batch_code'])) {
+            $query = $query->whereHas('details', function ($q1) use ($input) {
+                $q1->whereHas('batchInventory', function ($q2) use ($input) {
+                    $q2->where('code', 'like', "%{$input['batch_code']}%");
+                });
+            });
+        }
+
+        if (!empty($input['warehouse_name'])) {
+            $query = $query->whereHas('details', function ($q1) use ($input) {
+                $q1->whereHas('warehouseInventory', function ($q2) use ($input) {
+                    $q2->where('name', 'like', "%{$input['warehouse_name']}%");
+                });
+            });
+        }
+        if (!empty($input['warehouse_code'])) {
+            $query = $query->whereHas('details', function ($q1) use ($input) {
+                $q1->whereHas('warehouseInventory', function ($q2) use ($input) {
+                    $q2->where('code', 'like', "%{$input['warehouse_code']}%");
+                });
+            });
+        }
+
+        if (!empty($input['from']) && !empty($input['to'])) {
+            $query = $query->whereDate('inventories.date', '>=', date("Y-m-d", strtotime($input['from'])))
+                ->whereDate('inventories.date', '<=', date("Y-m-d", strtotime($input['to'])));
+        }
+
+        if (!empty($input['created_at'])) {
+            $query = $query->whereDate('inventories.created_at', date("Y-m-d", strtotime($input['created_at'])));
+        }
+
+        if (!empty($input['batch_parent_code'])) {
+            $query = $query->whereHas('details', function ($q1) use ($input) {
+                $q1->whereHas('batchInventory', function ($q2) use ($input) {
+                    $q2->where('code', 'like', "%{$input['batch_parent_code']}%");
+                });
+            });
+        }
+
+        if (!empty($input['batch_parent_name'])) {
+            $query = $query->whereHas('batch_parent', function ($q) use ($input) {
+                $q->where('name', 'like', "%{$input['batch_parent_name']}%");
+            });
+        }
+        if (!empty($input['parent_code'])) {
+            $query = $query->whereHas('warehouse_parent', function ($q) use ($input) {
+                $q->where('code', 'like', "%{$input['parent_code']}%");
+            });
+        }
+        if (!empty($input['parent_name'])) {
+            $query = $query->whereHas('warehouse_parent', function ($q) use ($input) {
+                $q->where('name', 'like', "%{$input['parent_name']}%");
+            });
+        }
+        if (!empty($input['product_code'])) {
+            $query = $query->whereHas('details.productInventory', function ($q) use ($input) {
+                $q->where('code', 'like', "%{$input['product_code']}%");
+            });
+        }
+        if (!empty($input['product_name'])) {
+            $query = $query->whereHas('details.productInventory', function ($q) use ($input) {
+                $q->where('name', 'like', "%{$input['product_name']}%");
+            });
+        }
+        if (!empty($input['category_id'])) {
+            $query = $query->whereHas('details.productInventory', function ($q) use ($input) {
+                $q->where('category_ids', 'like', "%{$input['category_id']}%");
+            });
+        }
+        if ($limit) {
+            if ($limit === 1) {
+                return $query->first();
+            } else {
+                return $query->paginate($limit);
+            }
+        } else {
+            return $query->get();
+        }
+    }
+
+    public function searchDetail($input = [], $with = [], $limit = null)
+    {
+        $query = InventoryDetail::model();
+
+        if (!empty($input['batch_code'])) {
+            $query->where('batch_code', 'like', "%{$input['batch_code']}%");
+        }
+
+        if (!empty($input['product_code'])) {
+            $query->where('product_code', 'like', "%{$input['product_code']}%");
+        }
+
+        if (!empty($input['warehouse_code'])) {
+            $query->where('warehouse_code', 'like', "%{$input['warehouse_code']}%");
+        }
+
+        if ($limit) {
+            if ($limit === 1) {
+                return $query->first();
+            } else {
+                return $query->paginate($limit);
+            }
+        } else {
+            return $query->get();
+        }
+    }
+
+    public function getAutoCode($type)
+    {
+        $inventoryType = INVENTORY_CODE_PREFIX[$type];
+        $y             = date("Y", time());
+        $m             = date("m", time());
+        $d             = date("d", time());
+        $lastCode      = DB::table('inventories')
+            ->select('code')->where('code', 'like', "$inventoryType$y$m$d%")->orderBy('id', 'desc')->first();
+        $index         = "001";
+        if (!empty($lastCode)) {
+            $index = (int)substr($lastCode->code, -3);
+            $index = str_pad(++$index, 3, "0", STR_PAD_LEFT);
+        }
+        return "$inventoryType$y$m$d$index";
+    }
+
+}

@@ -1,0 +1,33 @@
+<html>
+<head>
+    <title>
+        Code Xịn test CORS
+    </title>
+</head>
+<body>
+<form id="mForm" enctype="multipart/form-data" method="post">
+    <input name="file" type="file" id="file"/>
+    <button type="button" id="call_api">Send Request</button>
+</form>
+</body>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+<script type="text/javascript">
+  $(document).ready(function () {
+    var token = null;
+    var xhr = new XMLHttpRequest();
+    var url = 'http://api-tm.kpis.vn/auth/login-sms?store_token=408157962&phone=0963698221&device_token=xxx&device_id=mobile001&device_type=MOBILE';
+    var method = 'POST';
+    $('body').append('<p>Url: <strong>' + url + '</strong></p>').append('<p>Method: <strong>' + method + '</strong></p>');
+    $('#call_api').click(function () {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, url, true);
+      //xhr.setRequestHeader('Authorization', token);
+      xhr.onload = function (data) {
+        console.log(data);
+      };
+      xhr.send();
+    });
+  });
+</script>
+
+</html>

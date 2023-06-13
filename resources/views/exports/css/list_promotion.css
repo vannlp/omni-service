@@ -1,0 +1,18 @@
+    thead tr th {
+        vertical-align: middle;
+        text-align: center;
+        background-color: #ffcd00;
+        border: 5px solid #777;
+    }
+
+    .header-table th {
+        text-align: center;
+        background-color: #ffcd00;
+        border: 5px solid #777;
+    }
+
+    .header-actions td {
+        text-align: center;
+        background-color: #ffcd00;
+        border: 5px solid #777;
+    }
